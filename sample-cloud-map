@@ -1,0 +1,45 @@
+minion-4gb:
+  - james-ambari-server:
+      grains:
+        roles:
+          - ambari-server
+
+  - james-ambari-1:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-2:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-3:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-4:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-5:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-6:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-7:
+      grains:
+        roles:
+          - ambari
+
+  - james-ambari-8:
+      grains:
+        roles:
+          - ambari

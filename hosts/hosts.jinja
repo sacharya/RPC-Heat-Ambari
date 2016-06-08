@@ -1,0 +1,7 @@
+{% set target = 'G@roles:ambari-server or G@roles:ambari' %}
+{% set hosts = salt['mine.get'](target, 'host', 'compound').values() %}
+{% set ips = salt['mine.get'](target, 'internal_ips', 'compound') %}
+{% set hosts_map = {} %}
+{% for host in hosts %}
+    {% do hosts_map.update({host: (ips[host])|first }) %}
+{% endfor %}
