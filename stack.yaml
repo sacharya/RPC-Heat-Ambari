@@ -97,8 +97,6 @@ resources:
               - subnet
               - cidr
         - protocol: icmp
-          port_range_min: -1
-          port_range_max: 255
           remote_ip_prefix:
             get_attr:
               - subnet
@@ -344,6 +342,7 @@ resources:
               - ambari.hosts
               - ambari.ntp
               - ambari.ambari.server
+              - ambari.nginx
             'roles:ambari':
               - match: grain
               - ambari.hosts
@@ -360,6 +359,7 @@ resources:
         /srv/pillar/ambari.sls:
           str_replace:
             params:
+              placeholder: something
             template: |
               ambari:
                 server:
@@ -402,7 +402,7 @@ resources:
       # Get access from the master-port
       networks:
         - port:
-            get_resource: ambari-port
+            get_resource: ambari-server-port
 
       # Using SoftwareConfigs - This needs to be set to SOFTWARE_CONFIG
       user_data_format: SOFTWARE_CONFIG
@@ -477,6 +477,8 @@ resources:
     type: OS::Heat::SoftwareConfig
     properties:
       group: script
+      outputs:
+        - name: hostnames
       config: |
         #!/bin/bash
         set -ex
@@ -489,6 +491,8 @@ resources:
         salt '*' mine.update
         salt '*' state.highstate
         salt '*' test.ping
+        cd /srv/salt/ambari
+        python hostnames.py > $heat_outputs_path.hostnames
         touch ${prefix}.ran
 
   deploy:
@@ -510,6 +514,29 @@ outputs:
       get_attr:
         - ambari-server-ip
         - floating_ip_address
+
+  ambari-username:
+    description: Default ambari username.
+    value: admin
+
+  ambari-password:
+    description: Default ambari password. You should change this when you are able.
+    value: admin
+
+  ambari-node-hostnames:
+    description: Hostnames of the ambari nodes. These will be asked for when creating your cluster.
+    value:
+      get_attr:
+        - deploy
+        - hostnames
+
+  ambari-instructions:
+    description: Some basic instructions for finishing your cluster.
+    value: |
+      Ambari will ask you to provide hostnames of all the ambari nodes to be a member of the cluster.
+      Paste the hostnames provided on this page into the provided textbox.
+      In addition, you will need to choose manual registration when registering nodes.
+      The ambari nodes already have the ambari agent installed.
 
   ambari-node-ips:
     description: ip addresses of the ambari nodes.
