@@ -1,6 +1,6 @@
 include:
-  - hadoop.java
-  - hadoop.ambari.repo
+  - ambari.java
+  - ambari.ambari.repo
 
 ambari-server-pkg:
   pkg.installed:

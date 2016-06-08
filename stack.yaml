@@ -65,7 +65,7 @@ resources:
     properties:
       name:
         str_replace:
-          template: amabri-$stack_name$
+          template: ambari-$stack_name$
           params:
             $stack_name$:
               get_param: OS::stack_name
@@ -331,7 +331,7 @@ resources:
            'roles:ambari-server':
              - match: grain
              - ambari
-           'roles:amabri':
+           'roles:ambari':
              - match: grain
              - ambari
 
@@ -343,7 +343,7 @@ resources:
               - match: grain
               - ambari.hosts
               - ambari.ntp
-              - amabari.ambari.server
+              - ambari.ambari.server
             'roles:ambari':
               - match: grain
               - ambari.hosts
@@ -363,8 +363,8 @@ resources:
             template: |
               ambari:
                 server:
-                url_port: 8440
-                secured_url_port: 8441
+                  url_port: 8440
+                  secured_url_port: 8441
 
               interfaces:
                 public: eth0
@@ -504,14 +504,14 @@ resources:
       - ambari-nodes
 
 outputs:
-  amabari-server-ip:
+  ambari-server-ip:
     description: The ip address of the ambari/salt-master server.
     value:
       get_attr:
         - ambari-server-ip
         - floating_ip_address
 
-  amabari-node-ips:
+  ambari-node-ips:
     description: ip addresses of the ambari nodes.
     value:
       get_attr:

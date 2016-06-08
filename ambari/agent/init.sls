@@ -1,6 +1,6 @@
 include:
-  - hadoop.java
-  - hadoop.ambari.repo
+  - ambari.java
+  - ambari.ambari.repo
 
 ambari-agent-pkg:
   pkg.installed:
@@ -10,7 +10,7 @@ ambari-agent-pkg:
 
 /etc/ambari-agent/conf/ambari-agent.ini:
   file.managed:
-    - source: salt://hadoop/ambari/agent/files/ambari-agent.ini.jinja2
+    - source: salt://ambari/ambari/agent/files/ambari-agent.ini.jinja2
     - mode: 644
     - template: jinja
     - watch_in:

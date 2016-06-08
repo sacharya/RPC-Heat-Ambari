@@ -1,0 +1,24 @@
+{%- set interface = salt['pillar.get']('interfaces:private', 'eth0') -%}
+{%- set ip = salt['network.ipaddrs'](interface)|first -%}
+upstream ambari {
+    server {{ ip }}:8080;
+}
+server {
+    listen 80;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443;
+    auth_basic 'Restricted';
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    ssl on;
+    ssl_certificate /etc/nginx/ssl/ambari.crt;
+    ssl_certificate_key /etc/nginx/ssl/ambari.key;
+
+    location / {
+        proxy_pass http://ambari;
+        proxy_redirect off;
+        proxy_set_header Host $host;
+    }
+}

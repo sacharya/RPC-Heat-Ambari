@@ -4,7 +4,8 @@ base:
     - match: grain
     - ambari.hosts
     - ambari.ntp
-    - amabari.ambari.server
+    - ambari.ambari.server
+    - ambari.nginx
 
   'roles:ambari':
     - match: grain
