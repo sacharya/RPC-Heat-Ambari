@@ -6,19 +6,6 @@ nginx:
 nginx-extras:
   pkg.installed
 
-apache2-utils:
-  pkg.installed
-
-{{ web_username }}:
-  webutil.user_exists:
-    - password: {{ web_password }}
-    - htpasswd_file: /etc/nginx/.htpasswd
-    - options: c
-    - force: True
-    - require:
-      - pkg: nginx
-      - pkg: apache2-utils
-
 /etc/nginx/sites-enabled/default:
   file.absent:
     - require:
