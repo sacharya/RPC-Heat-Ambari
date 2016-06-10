@@ -1,0 +1,568 @@
+heat_template_version: 2015-04-30
+
+description: |
+  Deploys a single ambari server that also runs salt-master.
+  Deploys a variable number of machines that run ambari agent.
+  The user is able to decide which services to deploy to the agent machines though ambari server.
+  A floating ip will be assigned to the ambari server node.
+
+parameter_groups:
+  - label: Sizing and location
+    description: What networks and how large of a vm.
+    parameters:
+      - keyname
+      - image
+      - flavor
+      - floating-network
+      - node-count
+
+  - label: Don't touch
+    description: These parameters should be left default except in special cases.
+    parameters:
+      - git-formula-repo
+
+parameters:
+
+  keyname:
+    type: string
+    label: SSH Keypair name.
+    description: Name of the ssh key used to ssh into mysql server.
+
+  image:
+    type: string
+    label: Image Name
+    description: Name of the trusty image that contains software config heat elements.
+
+  flavor:
+    type: string
+    label: Flavor
+    description: Flavor (size) for all virtual machines in this stack.
+    default: m1.small
+
+  floating-network:
+    type: string
+    label: External Network Name or UUID
+    description: The private network created by this stack will route to this network.
+    default: changeme
+
+  node-count:
+    type: number
+    default: 6
+    label: Number of nodes in cluster
+    description: Number of nodes in cluster.
+
+  git-formula-repo:
+    type: string
+    label: Ambari Formula Repo
+    description: Formula git repository. This should remain as default except for development.
+    default: https://github.com/rcbops/RPC-Heat-Ambari.git
+
+resources:
+
+  # Security group
+  secgroup:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name:
+        str_replace:
+          template: ambari-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+      rules:
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: tcp
+          port_range_min: 4505
+          port_range_max: 4506
+        - protocol: tcp
+          port_range_min: 80
+          port_range_max: 80
+        - protocol: tcp
+          port_range_min: 443
+          port_range_max: 443
+        - protocol: tcp
+          port_range_min: 1
+          port_range_max: 65535
+          remote_ip_prefix:
+            get_attr:
+              - subnet
+              - cidr
+        - protocol: udp
+          port_range_min: 1
+          port_range_max: 65535
+          remote_ip_prefix:
+            get_attr:
+              - subnet
+              - cidr
+        - protocol: icmp
+          remote_ip_prefix:
+            get_attr:
+              - subnet
+              - cidr
+
+  # Keypair for communicating between nodes within the stack.
+  # Will allow minions to ssh into the master and vice versa.
+  coms:
+    type: OS::Nova::KeyPair
+    properties:
+      save_private_key: true
+      name:
+        str_replace:
+          template: ambari-key-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+
+  # Private network for this stack
+  net:
+    type: OS::Neutron::Net
+    properties:
+      name:
+        str_replace:
+          template: ambari-net-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+
+  # Private subnet for this stack
+  subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name:
+        str_replace:
+          template: ambari-subnet-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+      network_id:
+        get_resource: net
+      cidr: 10.20.20.0/24
+      dns_nameservers:
+        - 8.8.8.8
+        - 4.2.2.2
+
+  # Routes the private network to the external network.
+  router:
+    type: OS::Neutron::Router
+    properties:
+      name:
+        str_replace:
+          template: ambari-router-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+      external_gateway_info:
+        network:
+          get_param: floating-network
+
+  # Router interface
+  interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id:
+        get_resource: router
+      subnet_id:
+        get_resource: subnet
+
+  # One floating ip for the salt-master node
+  ambari-server-ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network:
+        get_param: floating-network
+
+  # One port for the ambari-server/salt-master node
+  ambari-server-port:
+    type: OS::Neutron::Port
+    properties:
+      name:
+        str_replace:
+          template: ambari-server-port-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+      network_id:
+        get_resource: net
+      security_groups:
+        - get_resource: secgroup
+
+  # Software configuration script for the salt-master
+  config-salt-master:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: script
+      inputs:
+        - name: public_key
+        - name: git_formula_repo
+      config: |
+        #!/bin/bash
+        set -ex
+        logdir=/var/log/heat-deployments
+        prefix=${logdir}/config-salt-master
+        mkdir -p $logdir
+        exec &> >(tee -a ${prefix}.log)
+
+        [ -e ${prefix}.ran ] && exit 0
+        chmod -R 0600 ${logdir}
+        chmod 0700 /root/.ssh/coms_rsa
+        chmod 0600 /srv/pillar/ambari.sls
+
+        # Add coms from minions to master
+        echo "$public_key" >> /root/.ssh/authorized_keys
+
+        # Install salt-master and git
+        echo "Install Salt Master"
+        add-apt-repository -y ppa:saltstack/salt2015-5
+        apt-get update
+        apt-get install -y --force-yes git salt-master
+
+        mkdir -p /srv/salt
+        echo -e 'file_roots:\n  base:\n    - /srv/salt' >> /etc/salt/master
+
+        git clone "${git_formula_repo}" /srv/salt/ambari
+
+        # Finally - Restart salt service
+        service salt-master restart
+
+  # Software configuration for the salt minion.
+  # Installs salt minion and connects minion to master.
+  config-salt-minion:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: script
+      inputs:
+        - name: public_key
+        - name: master
+      config: |
+        #!/bin/bash
+        set -ex
+        logdir=/var/log/heat-deployments
+        prefix=${logdir}/config-salt-minion
+        mkdir -p $logdir
+        exec &> >(tee -a ${prefix}.log)
+        [ -e ${prefix}.ran ] && exit 0
+
+        chmod -R 0600 ${logdir}
+        chmod 0700 /root/.ssh/coms_rsa
+
+        # Add coms from minions to master
+        echo "$public_key" >> /root/.ssh/authorized_keys
+
+        # Install salt minion
+        add-apt-repository -y ppa:saltstack/salt2015-5
+        apt-get update
+        apt-get install -y --force-yes git salt-minion
+
+        echo master: $master >> /etc/salt/minion
+        service salt-minion restart
+
+        ssh-keyscan -H $master >> /root/.ssh/known_hosts
+
+        MASTER_PKI_PATH="/etc/salt/pki/master/minions/"
+        MASTER_PKI_PATH_PRE="/etc/salt/pki/master/minions_pre/"
+        MINION_PKI_PATH="/etc/salt/pki/minion/minion.pub"
+        HOSTNAME="$(python  -c 'import socket; print socket.getfqdn()')"
+
+        while [ ! -s ${MINION_PKI_PATH} ]; do
+            echo "Waiting for ${MINION_PKI_PATH} to have non-zero content."
+            sleep 2
+        done
+
+        cp $MINION_PKI_PATH /root/minion_key
+        scp -i /root/.ssh/coms_rsa /root/minion_key root@$master:/tmp/$HOSTNAME
+        ssh -i /root/.ssh/coms_rsa root@$master "mv /tmp/$HOSTNAME $MASTER_PKI_PATH$HOSTNAME; chmod 700 $MASTER_PKI_PATH$HOSTNAME"
+        rm /root/minion_key
+        if [ ! -f /etc/salt/master ]; then
+            rm /root/.ssh/coms_rsa
+        fi
+        service salt-minion restart
+        touch ${prefix}.ran
+
+  # Software deployment for salt-master. Deploys the salt-master software
+  # configuration.
+  deploy-salt-master:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      input_values:
+        public_key:
+          get_attr:
+            - coms
+            - public_key
+        git_formula_repo:
+          get_param: git-formula-repo
+      config:
+        get_resource: config-salt-master
+      server:
+        get_resource: ambari-server
+
+  # The salt master instance
+  # Should have one floating ip
+  ambari-server:
+    type: OS::Nova::Server
+    properties:
+      key_name:
+        get_param: keyname
+      image:
+        get_param: image
+      flavor:
+        get_param: flavor
+      name:
+        str_replace:
+          template: ambari-server-$stack_name$
+          params:
+            $stack_name$:
+              get_param: OS::stack_name
+
+      personality:
+        # Private key for ssh'ing into minions
+        /root/.ssh/coms_rsa:
+          get_attr:
+            - coms
+            - private_key
+
+        # The top.sls file for salt pillars.
+        # Dictates which minions get which pillars
+        /srv/pillar/top.sls: |
+          base:
+           'roles:ambari-server':
+             - match: grain
+             - ambari
+           'roles:ambari':
+             - match: grain
+             - ambari
+
+        # The top.sls file for salt states.
+        # Dictates which minions get which states.
+        /srv/salt/top.sls: |
+          base:
+            'roles:ambari-server':
+              - match: grain
+              - ambari.hosts
+              - ambari.ntp
+              - ambari.ambari.server
+              - ambari.nginx
+            'roles:ambari':
+              - match: grain
+              - ambari.hosts
+              - ambari.ntp
+              - ambari.hadoop
+              - ambari.ambari.agent
+
+        # Set the salt grain for roles
+        /etc/salt/grains: |
+          roles:
+            - ambari-server
+
+        # The app pillar. Describe interfaces and salt-mine functions.
+        /srv/pillar/ambari.sls:
+          str_replace:
+            params:
+              placeholder: something
+            template: |
+              ambari:
+                server:
+                  url_port: 8440
+                  secured_url_port: 8441
+
+              interfaces:
+                public: eth0
+                private: eth0
+
+              mine_functions:
+                internal_ips:
+                  mine_function: network.ipaddrs
+                  interface: eth0
+                external_ips:
+                  mine_function: network.ipaddrs
+                  interface: eth0
+                id:
+                  - mine_function: grains.get
+                  - id
+                host:
+                  - mine_function: grains.get
+                  - host
+
+              # These remain unused for now but may be used in the future.
+              user-ports:
+                ssh:
+                  chain: INPUT
+                  proto: tcp
+                  dport: 22
+                salt-master:
+                  chain: INPUT
+                  proto: tcp
+                  dport: 4505
+                salt-minion:
+                  chain: INPUT
+                  proto: tcp
+                  dport: 4506
+
+      # Get access from the master-port
+      networks:
+        - port:
+            get_resource: ambari-server-port
+
+      # Using SoftwareConfigs - This needs to be set to SOFTWARE_CONFIG
+      user_data_format: SOFTWARE_CONFIG
+
+  ambari-server-floating-ip-ass:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id:
+        get_resource: ambari-server-ip
+      port_id:
+        get_resource: ambari-server-port
+
+  # Deploys the salt-minion software config to the ambari-server node.
+  deploy-salt-minion-ambari-server:
+    type: OS::Heat::SoftwareDeployment
+    depends_on: deploy-salt-master
+    properties:
+      input_values:
+        public_key:
+          get_attr:
+            - coms
+            - public_key
+        master:
+          get_attr:
+            - ambari-server
+            - first_address
+      config:
+        get_resource: config-salt-minion
+      server:
+        get_resource: ambari-server
+
+  ambari-nodes:
+    type: OS::Heat::ResourceGroup
+    depends_on: deploy-salt-master
+    properties:
+      count:
+        get_param: node-count
+      resource_def:
+        type: Salt::AmbariMinion
+        properties:
+          flavor:
+            get_param: flavor
+          stack-prefix:
+            str_replace:
+              template: ambari-node-$stack_name$
+              params:
+                $stack_name$:
+                  get_param: OS::stack_name
+          private_key:
+            get_attr:
+              - coms
+              - private_key
+          public_key:
+            get_attr:
+              - coms
+              - public_key
+          image:
+            get_param: image
+          network:
+            get_resource: net
+          master:
+            get_attr:
+              - ambari-server
+              - first_address
+          minion-config:
+            get_resource: config-salt-minion
+          minion-roles: "ambari"
+          security-group:
+            get_resource: secgroup
+
+  config-deploy:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: script
+      outputs:
+        - name: hostnames
+      config: |
+        #!/bin/bash
+        set -ex
+        logdir=/var/log/heat-deployments
+        prefix=${logdir}/config-deploy
+        mkdir -p $logdir
+        exec &> >(tee -a ${prefix}.log)
+        [ -e ${prefix}.ran ] && exit 0
+        salt '*' saltutil.refresh_pillar
+        salt '*' mine.update
+        salt '*' state.highstate
+        salt '*' test.ping
+        cd /srv/salt/ambari
+        python hostnames.py > $heat_outputs_path.hostnames
+        touch ${prefix}.ran
+
+  deploy:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      config:
+        get_resource: config-deploy
+      server:
+        get_resource: ambari-server
+    depends_on:
+      - deploy-salt-master
+      - deploy-salt-minion-ambari-server
+      - ambari-nodes
+
+outputs:
+  ambari-server-ip:
+    description: The ip address of the ambari/salt-master server.
+    value:
+      get_attr:
+        - ambari-server-ip
+        - floating_ip_address
+
+  ambari-username:
+    description: Default ambari username.
+    value: admin
+
+  ambari-password:
+    description: Default ambari password. You should change this when you are able.
+    value: admin
+
+  ambari-node-hostnames:
+    description: Hostnames of the ambari nodes. These will be asked for when creating your cluster.
+    value:
+      get_attr:
+        - deploy
+        - hostnames
+
+  ambari-instructions:
+    description: Some basic instructions for finishing your cluster.
+    value: |
+      Ambari will ask you to provide hostnames of all the ambari nodes to be a member of the cluster.
+      Paste the hostnames provided on this page into the provided textbox.
+      In addition, you will need to choose manual registration when registering nodes.
+      The ambari nodes already have the ambari agent installed.
+
+  ambari-node-ips:
+    description: ip addresses of the ambari nodes.
+    value:
+      get_attr:
+        - ambari-nodes
+        - minion-ip
+
+  url:
+    description: Url of the ambari server
+    value:
+      str_replace:
+        template: https://$ambari-server-ip$
+        params:
+          $ambari-server-ip$:
+            get_attr:
+              - ambari-server-ip
+              - floating_ip_address
+
+  ssh_access:
+    description: How to ssh into the stack.
+    value:
+      str_replace:
+        template: ssh ubuntu@$ambari-server-ip$
+        params:
+          $ambari-server-ip$:
+            get_attr:
+              - ambari-server-ip
+              - floating_ip_address

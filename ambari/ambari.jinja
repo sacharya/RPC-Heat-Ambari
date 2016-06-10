@@ -1,0 +1,9 @@
+{% set host = salt['mine.get']('roles:ambari-server', 'host', 'grain').values()|first %}
+{% set server = salt['pillar.get']('ambari:server', {}) %}
+
+{% set server = {
+    'host': host,
+    'url_port': server.get('url_port', 8440),
+    'secured_url_port': server.get('secured_url_port', 8441)
+} %}
+
