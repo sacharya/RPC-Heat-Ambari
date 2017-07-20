@@ -406,6 +406,7 @@ resources:
 
       # Using SoftwareConfigs - This needs to be set to SOFTWARE_CONFIG
       user_data_format: SOFTWARE_CONFIG
+      config_drive: "true"
 
   ambari-server-floating-ip-ass:
     type: OS::Neutron::FloatingIPAssociation

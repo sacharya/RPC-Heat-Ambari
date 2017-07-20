@@ -110,6 +110,7 @@ resources:
             get_resource: minion-port
 
       user_data_format: SOFTWARE_CONFIG
+      config_drive: "true"
 
 outputs:
   minion-ip:
